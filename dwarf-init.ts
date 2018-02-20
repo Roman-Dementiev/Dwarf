@@ -239,12 +239,18 @@
 				console.log("Creating script element for '" + url + "'");
 				let scriptEl = document.createElement("script");
 				scriptEl.onload = function () {
-					console.log("Dwarf.Loader.executeAscyn("+url+")");
+					console.log("Dwarf.Loader.executeAscyn("+url+") finished");
 					resolve();
 				};
-				scriptEl.onerror = (ev: ErrorEvent) => {
-					console.error("Dwarf.Loader.executeAscyn("+url+") failed:", ev.error);
-					reject();
+				scriptEl.onerror = (ev: ErrorEvent) =>
+				{
+					if (typeof ev.error !== 'undefined') {
+						console.error("Dwarf.Loader.executeAscyn(" + url + ") failed:", ev.error);
+						reject();
+					} else {
+						console.log("Dwarf.Loader.executeAscyn(" + url + ") finished");
+						resolve();
+					}
 				}
 				scriptEl.src = url;
 
