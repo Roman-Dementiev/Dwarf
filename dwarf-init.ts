@@ -66,8 +66,8 @@
 					console.debug("Dwarf.Loader = DwolfLoader");
 					Loader._instance = new DwolfLoader();
 				}
-				return Loader._instance;
 			}
+			return Loader._instance;
 		}
 
 		private static _importer: ILoader = null;
