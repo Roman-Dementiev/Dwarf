@@ -50,8 +50,8 @@
 		private static importStack: string[] = [];
 
 		private static _instance: ILoader = null;
-//		public static get instance(): ILoader { return Loader._instance; }
-//		public static set instance(loader: ILoader) { Loader._instance = loader; }
+		public static get instance(): ILoader { return Loader._instance; }
+		public static set instance(loader: ILoader) { Loader._instance = loader; }
 		public static async getInstanceAsync(): Promise<ILoader>
 		{
 			if (!Loader._instance) {
