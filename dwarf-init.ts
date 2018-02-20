@@ -5,7 +5,9 @@
 	export type Callback = () => void;
 
 	export const kPathRoot = '';
+	export const kPathAt = '@';
 	export const kPathScripts = 'scripts';
+	export const kPathDwarf = 'dwarf';
 	export const kPathImages = 'images';
 
 	export type PathConfig = {
@@ -37,7 +39,7 @@
 	{
 		protected static _pathes: PathConfig;
 		public static get pathes(): PathConfig {
-			if (!Loader._pathes) Loader.configure(null);
+			if (!Loader._pathes) Loader.configure();
 			return Loader._pathes;
 		} 
 		public static set pathes(pathes: PathConfig) {
@@ -58,7 +60,8 @@
 					Loader._instance = new SystemLoader();
 				} else {
 					if (typeof Dwolf === 'undefined') {
-						await Loader.executeAsync("Dwarf/Dwolf.js");
+						let dwolf = Loader.resolvePath("Dwolf.js", kPathDwarf);
+						await Loader.executeAsync(dwolf);
 					}
 					console.debug("Dwarf.Loader = DwolfLoader");
 					Loader._instance = new DwolfLoader();
@@ -67,50 +70,24 @@
 			}
 		}
 
-
 		private static _importer: ILoader = null;
 		public static get importer(): ILoader { return Loader._importer; }
 		public static set importer(importer: ILoader) { Loader._importer = importer; }
 
-		public static configure(pathes: PathConfig)
+		protected static _numRequested = 0;
+		public static get numRequested(): number { return Loader._numRequested; }
+
+		protected static _numImported = 0;
+		public static get numImported(): number { return Loader._numImported; }
+
+		public static getLoadProgress(): number
 		{
-			console.debug("Dwarf.Loader.configure() pathes=", pathes);
-
-			if (!pathes) pathes = {};
-
-			let root = pathes[kPathRoot];
-			if (!root) {
-				pathes[kPathRoot] = root = '';
-			} else if (root[root.length - 1] !== '/') {
-				pathes[kPathRoot] = root = root + '/';
+			if (Loader._numRequested > 0) {
+				return Loader._numImported / Loader._numRequested;
+			} else {
+				return bootstraping ? 0 : 1;
 			}
-
-			pathes[kPathRoot] = root;
-
-			let types = Object.getOwnPropertyNames(pathes);
-			for (let type of types) {
-				let path = pathes[type];
-				if (type === kPathRoot || typeof path !== 'string')
-					continue;
-
-				if (path) {
-					if (path[0] === '/') {
-						path = path.substr(1);
-					} else {
-						path = root + path;
-					}
-					if (path && path[path.length-1] !== '/') {
-						path = path + '/'
-					}
-				} else {
-					path = root;
-				}
-				pathes[type] = path;
-			}
-
-			this._pathes = pathes;
 		}
-
 		//private static importState(url: string): ImportState
 		//{
 		//	return Loader.states[url];
@@ -118,7 +95,7 @@
 
 		public static isImported(script: string)
 		{
-			let url = Loader.resolvePath(script, kPathScripts);
+			let url = Loader.scriptUrl(script);
 			return Loader.importing[url] === true;
 		}
 
@@ -131,10 +108,14 @@
 			}
 
 			for (let script of scripts) {
-				let url = Loader.resolvePath(script, kPathScripts);
+				let url = Loader.scriptUrl(script);
 				let state = Loader.importing[url];
-				if (state === true)
+				if (typeof state === 'boolean') {
+					if (!state) {
+						console.error(`Dwarf.imports(${script}): already failed'`);
+					}
 					continue;
+				}
 
 				if (Loader.importStack.indexOf(url) >= 0) {
 					let current = Loader.importStack[Loader.importStack.length-1];
@@ -154,9 +135,13 @@
 
 				Loader.importing[url] = new Promise<any>((resolve, reject) => {
 					Loader.importStack.push(url);
-					importer.importScript(url);
+					try {
+						importer.importScript(url);
+						Loader.onImported(url);
+					} catch (err) {
+						Loader.onImported(url, err);
+					}
 					Loader.importStack.pop();
-					Loader.onImported(url);
 					resolve();
 				});
 			}
@@ -166,31 +151,109 @@
 			return this.pathes[kPathRoot];
 		}
 
-		public static resolvePath(path: string, type?: string)
+		public static configure(pathes?: PathConfig)
 		{
-			if (!path) path = '';
-			if (!type) type = kPathRoot;
+			console.debug("Dwarf.Loader.configure() pathes=", pathes);
+			if (!pathes) pathes = {};
 
-			if (path && path.charAt(0) === '/') {
-				type = kPathRoot;
-				path = path.substr(1);
+			let root = pathes[kPathRoot];
+			if (!root) {
+				pathes[kPathRoot] = root = '';
+			} else if (root[root.length - 1] !== '/') {
+				pathes[kPathRoot] = root = root + '/';
 			}
 
-			let pathes = this.pathes;
-			if (pathes[type]) {
-				return pathes[type] + path;
-			} else if (type) {
-				pathes[type] = Loader.rootPath() + type + "/";
-				return pathes[type] + path;
-			} else {
-				return Loader.rootPath() + path;
+			let types = Object.getOwnPropertyNames(pathes);
+			for (let type of types) {
+				let path = pathes[type];
+				if (type === kPathRoot || type === kPathAt || typeof path !== 'string')
+					continue;
+
+				if (path) {
+					if (path[0] === '/') {
+						path = path.substr(1);
+					} else {
+						path = root + path;
+					}
+					if (path && path[path.length - 1] !== '/') {
+						path = path + '/'
+					}
+				} else {
+					path = root;
+				}
+				pathes[type] = path;
 			}
+
+			let scripts = pathes[kPathScripts];
+			if (!scripts) {
+				pathes[kPathScripts] = scripts = root + 'scripts/';
+			}
+			if (!pathes[kPathDwarf]) {
+				pathes[kPathDwarf] = scripts + "Dwarf/";
+			}
+
+			this._pathes = pathes;
 		}
 
-		public static onImported(url: string)
+		public static resolveAll(pathes: string[], type: string): string[]
 		{
-			console.log("Dwarf.Loader: '"+url+"' imported");
-			Loader.importing[url] = true;
+			let resolved: string[] = [];
+			for (let path of pathes) {
+				resolved.push(Loader.resolvePath(path, type));
+			}
+			return resolved;
+		}
+
+		public static resolvePath(path: string, type?: string)
+		{
+			let pathes = this.pathes;
+			if (path) {
+				switch (path.charAt(0))
+				{
+					case '!':
+						return path;
+					case '/':
+						path = path.substr(1);
+						type = kPathRoot;
+						break;
+					case kPathAt:
+						path = path.substr(1);
+						type = pathes[kPathAt];
+						break;
+				}
+			} else {
+				path = '';
+			}
+
+			if (!type) type = kPathRoot;
+
+			let dir: string;
+			if (pathes[type]) {
+				dir = pathes[type];
+			//} else if (type) {
+			//	dir = pathes[type] = Loader.rootPath() + type + "/";
+			} else {
+				dir = Loader.rootPath();
+			}
+			return '!' + dir + path;
+		}
+
+		public static scriptUrl(script: string)
+		{
+			let resolved = Loader.resolvePath(script, kPathScripts);
+			return resolved.substr(1);
+		}
+
+		public static onImported(url: string, error?: any)
+		{
+			if (error) {
+				console.error("Dwarf.Loader: '" + url + "' failed:", error);
+				Loader.importing[url] = false;
+			} else {
+				console.log("Dwarf.Loader: '" + url + "' imported");
+				Loader.importing[url] = true;
+			} 
+			Loader._numImported++;
 		}
 
 		//public importScript(script: string): void
@@ -202,14 +265,21 @@
 
 		public static importAsync(script: string): Promise<any>
 		{
-			let url = Loader.resolvePath(script, kPathScripts);
+			let url = Loader.scriptUrl(script);
 			let state = Loader.importing[url];
-			if (state === true) {
-				return Promise.resolve();
+			if (typeof state === 'boolean') {
+				if (state) {
+					return Promise.resolve();
+				} else {
+					return Promise.reject("failed");
+				}
 			}
 
 			if (!state) {
-				Loader.importing[url] = state = Loader.importer.importAsync(url).then(() => Loader.onImported(url));
+				console.debug("Dwarf.Loader.importAsync(" + url + ")...");
+				Loader.importing[url] = state = Loader.importer.importAsync(url)
+					.then(() => Loader.onImported(url))
+					.catch((error: any) => Loader.onImported(url, error));
 			}
 			return state;
 		}
@@ -232,11 +302,11 @@
 
 		public static async executeAsync(script: string): Promise<void>
 		{
-			let url = Loader.resolvePath(script, kPathScripts);
+			let url = Loader.scriptUrl(script);
 
 			return new Promise<void>((resolve, reject) =>
 			{
-				console.log("Creating script element for '" + url + "'");
+				//console.log("Creating script element for '" + url + "'");
 				let scriptEl = document.createElement("script");
 				scriptEl.onload = function () {
 					console.log("Dwarf.Loader.executeAscyn("+url+") finished");
@@ -411,46 +481,11 @@
 		afterBoot?: string[]
 	})
 	{
-		//let pathes: PathConfig;
-		//let loaderScript: string;
-		//let bootstrap: Bootstrap;
-		//let bootParam: any;
-		//let scripts: string[];
-
-		//switch (typeof arg1) {
-		//	case 'undefined':
-		//		break;
-
-		//	case 'function':
-		//		bootstrap = arg1;
-		//		bootParam = arg2;
-		//		scripts = arg3;
-		//		break;
-
-		//	case 'string':
-		//		loaderScript = arg1;
-		//		bootstrap = arg2;
-		//		bootParam = arg3;
-		//		scripts = arg4;
-		//		break;
-
-		//	default:
-		//		pathes = arg1;
-		//		loaderScript = arg2;
-		//		bootstrap = arg3;
-		//		bootParam = arg4;
-		//		scripts = arg5;
-		//		break;
-		//}
-
 		if (!arg) arg = {};
 		Loader.configure(arg.pathes);
 
 		let loader = arg.loader;
 		if (loader) {
-			//if (!loader.endsWith('.js')) {
-			//	loader += '.js';
-			//}
 			await Loader.executeAsync(loader);
 		}
 
@@ -491,7 +526,7 @@
 				_scripts.push(script);
 			}
 		} else {
-			_scripts = ['Dwarf/Dwarf.js', 'Dwarf/Dwog.js', 'Dwarf/Dwag.js'];
+			_scripts = Loader.resolveAll(['Dwarf.js', 'Dwog.js', 'Dwag.js'], kPathDwarf);
 		}
 		await init({ afterBoot: _scripts });
 	}
