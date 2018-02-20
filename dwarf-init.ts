@@ -154,7 +154,11 @@
 		public static configure(pathes?: PathConfig)
 		{
 			console.debug("Dwarf.Loader.configure() pathes=", pathes);
-			if (!pathes) pathes = {};
+			if (!pathes) {
+				if (Loader._pathes)
+					return;
+				pathes = {};
+			}
 
 			let root = pathes[kPathRoot];
 			if (!root) {
